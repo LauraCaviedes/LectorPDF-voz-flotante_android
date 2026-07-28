@@ -1,0 +1,6 @@
+{
+  "name": "Lector PDF Flotante Neuronal",
+  "description": "Lector PDF en voz alta con widget flotante, pipeline de extracción, sanitización regex, chunking semántico y síntesis de voz neuronal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
