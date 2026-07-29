@@ -54,7 +54,6 @@ lector-pdf-flotante-neuronal/
 └── README.md                                          # Documentación técnica
 ```
 
----
 
 ## 🎙️ El Sistema de Voces y Suavizado Neuronal
 
@@ -65,7 +64,6 @@ Para garantizar que la lectura sea **cálida, suave y fluida** sin sonar robóti
 3. **Cadencia Prosódica:** Modifica la velocidad predeterminada a **0.95x** y preprocesa el texto insertando micropauses de respiración en comas y conjunciones.
 4. **Pausas entre Oraciones:** Incorpora un retardo configurable de **300ms a 500ms** entre oraciones para emular el ritmo de lectura humana.
 
----
 
 ## 🔬 Métodos y Algoritmos del Pipeline
 
@@ -86,7 +84,6 @@ Para garantizar que la lectura sea **cálida, suave y fluida** sin sonar robóti
 - **Método:** `playCurrentSentence()` & `advanceToNextSentence()`
 - Un `ForegroundService` que gestiona `current_sentence_index`. Al avanzar o retroceder, invoca `tts.stop()` e inicia inmediatamente el nuevo índice sin latencia.
 
----
 
 ## 🎨 Sistema de Diseño UI/UX (Jetpack Compose)
 
@@ -110,8 +107,8 @@ La interfaz se rige por un sistema de diseño limpio, neutro e impecable:
 
 1. **Clonar o descargar el repositorio:**
    ```bash
-   git clone <URL_DEL_REPOSITORIO>
-   cd lector-pdf-flotante-neuronal
+   git clone https://github.com/LauraCaviedes/LectorPDF-voz-flotante_android.git
+   cd LectorPDF-voz-flotante_android
    ```
 
 2. **Instalar dependencias:**
