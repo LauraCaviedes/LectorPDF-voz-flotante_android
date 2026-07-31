@@ -163,6 +163,7 @@ class MainActivity : ComponentActivity() {
                         readingSpeed = newSpeed
                         updateServiceSpeed(newSpeed)
                     },
+                    onCycleVoiceClick = { cycleVoice() },
                     onPickPdfClick = { pdfPickerLauncher.launch("application/pdf") },
                     onRequestOverlayPermission = { requestOverlayPermission() }
                 )
@@ -262,6 +263,17 @@ class MainActivity : ComponentActivity() {
             startService(intent)
         }
     }
+
+    private fun cycleVoice() {
+        if (isServiceActive) {
+            val intent = Intent(this, FloatingControlService::class.java).apply {
+                action = FloatingControlService.ACTION_CYCLE_VOICE
+            }
+            startService(intent)
+        } else {
+            Toast.makeText(this, "Activa el Interruptor Maestro para alternar la voz en tiempo real", Toast.LENGTH_SHORT).show()
+        }
+    }
 }
 
 // Tema de UI personalizado
@@ -289,6 +301,7 @@ fun MainScreen(
     isExtracting: Boolean,
     onToggleMasterSwitch: (Boolean) -> Unit,
     onSpeedChange: (Float) -> Unit,
+    onCycleVoiceClick: () -> Unit,
     onPickPdfClick: () -> Unit,
     onRequestOverlayPermission: () -> Unit
 ) {
@@ -320,7 +333,7 @@ fun MainScreen(
                                 color = CharcoalDark
                             )
                             Text(
-                                text = "Motor Neuronal • es-MX-JorgeNeural",
+                                text = "Motor Neuronal • Voces en Español",
                                 fontSize = 11.sp,
                                 color = SlateBlue
                             )
@@ -448,7 +461,7 @@ fun MainScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Velocidad de Lectura",
+                            text = "Velocidad de Lectura (En Tiempo Real)",
                             fontSize = 14.sp,
                             color = SlateBlue
                         )
@@ -474,33 +487,49 @@ fun MainScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Configuración de Voz Predeterminada
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(OffWhite)
-                            .padding(12.dp)
+                    // Configuración de Voz Interactiva
+                    Card(
+                        onClick = onCycleVoiceClick,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = OffWhite),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.RecordVoiceOver,
-                            contentDescription = "Voz Neuronal",
-                            tint = SlateBlue,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "Voz Neuronal Predeterminada",
-                                fontSize = 12.sp,
-                                color = SlateBlue
-                            )
-                            Text(
-                                text = "es-MX-JorgeNeural (Español México)",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.sp,
-                                color = CharcoalDark
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.RecordVoiceOver,
+                                    contentDescription = "Voz Neuronal",
+                                    tint = SageTeal,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "Voz de Lectura (Toca para cambiar)",
+                                        fontSize = 12.sp,
+                                        color = SlateBlue
+                                    )
+                                    Text(
+                                        text = "Alternar Voces en Español (Masculinas / Neuronal)",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp,
+                                        color = CharcoalDark
+                                    )
+                                }
+                            }
+                            Icon(
+                                imageVector = Icons.Default.Sync,
+                                contentDescription = "Rotar Voz",
+                                tint = SageTeal
                             )
                         }
                     }
@@ -602,6 +631,16 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
     private var sentences: List<String> = emptyList()
     private var readingSpeed = 1.0f
 
+    private var availableSpanishVoices: List<android.speech.tts.Voice> = emptyList()
+    private var currentVoiceIndex = 0
+
+    private lateinit var btnPlayPause: ImageButton
+    private lateinit var btnPrev: ImageButton
+    private lateinit var btnNext: ImageButton
+    private lateinit var btnVoice: ImageButton
+    private lateinit var btnClose: ImageButton
+    private lateinit var txtCounter: TextView
+
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
 
@@ -613,6 +652,7 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
         const val ACTION_STOP = "ACTION_STOP"
         const val ACTION_LOAD_PDF = "ACTION_LOAD_PDF"
         const val ACTION_UPDATE_SPEED = "ACTION_UPDATE_SPEED"
+        const val ACTION_CYCLE_VOICE = "ACTION_CYCLE_VOICE"
 
         const val EXTRA_PDF_URI = "EXTRA_PDF_URI"
         const val EXTRA_SPEED = "EXTRA_SPEED"
@@ -642,6 +682,12 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
                 ACTION_UPDATE_SPEED -> {
                     readingSpeed = it.getFloatExtra(EXTRA_SPEED, 1.0f)
                     tts?.setSpeechRate(readingSpeed)
+                    if (isPlaying) {
+                        playCurrentSentence()
+                    }
+                }
+                ACTION_CYCLE_VOICE -> {
+                    cycleToNextVoice()
                 }
                 ACTION_STOP -> {
                     stopSelf()
@@ -652,12 +698,17 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun initTtsEngine() {
-        tts = TextToSpeech(this, this)
+        // Intentar cargar específicamente el motor de Google TTS para máxima calidad neuronal
+        try {
+            tts = TextToSpeech(this, this, "com.google.android.tts")
+        } catch (e: Exception) {
+            tts = TextToSpeech(this, this)
+        }
     }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            // Intentar configurar voz en español neutro / México
+            // Idioma base
             val locale = Locale("es", "MX")
             val result = tts?.setLanguage(locale)
             
@@ -665,24 +716,34 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
                 tts?.language = Locale("es", "ES")
             }
 
-            // Buscar si existe la voz específica 'es-MX-JorgeNeural' o de alta calidad (Neural / Natural)
-            val voices = tts?.voices
-            val targetVoice = voices?.find { 
-                it.name.contains("es-mx-jorgeneural", ignoreCase = true) ||
-                it.name.contains("natural", ignoreCase = true) ||
-                it.name.contains("jorge", ignoreCase = true)
-            } ?: voices?.find { it.locale.language == "es" }
-
-            targetVoice?.let { voice ->
-                tts?.voice = voice
+            // Filtrar y ordenar todas las voces en español disponibles en el dispositivo
+            val allVoices = tts?.voices ?: emptySet()
+            val spanishVoices = allVoices.filter { voice ->
+                voice.locale.language == "es"
             }
 
-            // Configurar modulación de frecuencia cálida/suave (pitch 0.95f) y velocidad pausada
-            tts?.setPitch(0.95f)
+            // Ordenar para poner primero las voces masculinas / Jorge / Neurales / Naturales
+            availableSpanishVoices = spanishVoices.sortedByDescending { voice ->
+                val name = voice.name.lowercase(Locale.ROOT)
+                var score = 0
+                if (name.contains("jorge")) score += 20
+                if (name.contains("male") || name.contains("masculino")) score += 10
+                if (name.contains("neural") || name.contains("natural") || name.contains("network")) score += 8
+                if (name.contains("es-mx")) score += 5
+                score
+            }
+
+            if (availableSpanishVoices.isNotEmpty()) {
+                currentVoiceIndex = 0
+                tts?.voice = availableSpanishVoices[currentVoiceIndex]
+            }
+
+            // Frecuencia cálida suave (pitch 0.92f) para voz natural sin agudos metálicos
+            tts?.setPitch(0.92f)
             tts?.setSpeechRate(readingSpeed)
             isTtsReady = true
 
-            // Registrar listener de progreso para avanzar oraciones secuencialmente
+            // Listener de reproducción continua oración por oración
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
                     updateWidgetState(isPlaying = true)
@@ -690,6 +751,7 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
 
                 override fun onDone(utteranceId: String?) {
                     serviceScope.launch {
+                        delay(300) // Pausa de respiración natural de 300ms entre oraciones
                         advanceToNextSentence()
                     }
                 }
@@ -698,6 +760,37 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
                     updateWidgetState(isPlaying = false)
                 }
             })
+        }
+    }
+
+    /**
+     * Alternar a la siguiente voz en español disponible
+     */
+    private fun cycleToNextVoice() {
+        if (availableSpanishVoices.isEmpty()) {
+            android.widget.Toast.makeText(this, "No se encontraron más voces en español.", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        currentVoiceIndex = (currentVoiceIndex + 1) % availableSpanishVoices.size
+        val selectedVoice = availableSpanishVoices[currentVoiceIndex]
+        tts?.voice = selectedVoice
+
+        val voiceDisplayName = selectedVoice.name
+            .replace("es-es-x-", "España ")
+            .replace("es-mx-x-", "México ")
+            .replace("es-us-x-", "EEUU ")
+            .replace("-network", " (Neuronal)")
+            .replace("-local", " (Local)")
+
+        android.widget.Toast.makeText(
+            this,
+            "🎙️ Voz cambiada a: $voiceDisplayName (\${currentVoiceIndex + 1}/\${availableSpanishVoices.size})",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
+
+        if (isPlaying) {
+            playCurrentSentence()
         }
     }
 
@@ -762,12 +855,10 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
 
     /**
      * Inyección del Widget Flotante Superpuesto mediante WindowManager
+     * Construido 100% programáticamente en Kotlin para evitar errores de layout XML
      */
     private fun injectFloatingWidget() {
-        val layoutInflater = getSystemService(Context.LAYOUT_INFLATER_SERVICE) as LayoutInflater
-        
-        // Crear Layout inflado dinámicamente o estructurado para la pastilla horizontal
-        floatingView = layoutInflater.inflate(R.layout.widget_floating_control, null)
+        floatingView = createProgrammaticWidgetView()
 
         val layoutParamsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -786,28 +877,6 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
             gravity = Gravity.TOP or Gravity.START
             x = 100
             y = 200
-        }
-
-        // Configurar Botones del Widget
-        val btnPlayPause = floatingView?.findViewById<ImageButton>(R.id.btnPlayPause)
-        val btnPrev = floatingView?.findViewById<ImageButton>(R.id.btnPrev)
-        val btnNext = floatingView?.findViewById<ImageButton>(R.id.btnNext)
-        val btnClose = floatingView?.findViewById<ImageButton>(R.id.btnClose)
-
-        btnPlayPause?.setOnClickListener {
-            if (isPlaying) pauseSpeech() else playCurrentSentence()
-        }
-
-        btnPrev?.setOnClickListener {
-            retreatToPreviousSentence()
-        }
-
-        btnNext?.setOnClickListener {
-            advanceToNextSentence()
-        }
-
-        btnClose?.setOnClickListener {
-            stopSelf()
         }
 
         // Lógica de Arrastre Touch (Drag & Drop)
@@ -844,22 +913,105 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
+    /**
+     * Crea la pastilla flotante programáticamente con botones e íconos nativos de Android
+     */
+    private fun createProgrammaticWidgetView(): View {
+        val context = this
+
+        val container = android.widget.LinearLayout(context).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8))
+
+            val shape = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(24).toFloat()
+                setColor(android.graphics.Color.parseColor("#EE1E293B")) // Charcoal oscuro translúcido
+                setStroke(dpToPx(1), android.graphics.Color.parseColor("#475569"))
+            }
+            background = shape
+        }
+
+        btnPrev = ImageButton(context).apply {
+            setImageResource(android.R.drawable.ic_media_previous)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setColorFilter(android.graphics.Color.WHITE)
+            setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+            setOnClickListener { retreatToPreviousSentence() }
+        }
+
+        btnPlayPause = ImageButton(context).apply {
+            setImageResource(android.R.drawable.ic_media_play)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setColorFilter(android.graphics.Color.parseColor("#4ADE80")) // Verde pastel
+            setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+            setOnClickListener { if (isPlaying) pauseSpeech() else playCurrentSentence() }
+        }
+
+        btnNext = ImageButton(context).apply {
+            setImageResource(android.R.drawable.ic_media_next)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setColorFilter(android.graphics.Color.WHITE)
+            setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+            setOnClickListener { advanceToNextSentence() }
+        }
+
+        txtCounter = TextView(context).apply {
+            text = "0/0"
+            setTextColor(android.graphics.Color.parseColor("#CBD5E1"))
+            textSize = 12f
+            setPadding(dpToPx(8), 0, dpToPx(8), 0)
+        }
+
+        btnVoice = ImageButton(context).apply {
+            setImageResource(android.R.drawable.ic_btn_speak_now)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setColorFilter(android.graphics.Color.parseColor("#38BDF8")) // Azul micrófono
+            setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+            setOnClickListener { cycleToNextVoice() }
+        }
+
+        btnClose = ImageButton(context).apply {
+            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setColorFilter(android.graphics.Color.parseColor("#F87171")) // Rojo
+            setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+            setOnClickListener { stopSelf() }
+        }
+
+        container.addView(btnPrev)
+        container.addView(btnPlayPause)
+        container.addView(btnNext)
+        container.addView(txtCounter)
+        container.addView(btnVoice)
+        container.addView(btnClose)
+
+        return container
+    }
+
+    private fun dpToPx(dp: Int): Int {
+        return (dp * resources.displayMetrics.density).toInt()
+    }
+
     private fun updateWidgetState(isPlaying: Boolean) {
-        val btnPlayPause = floatingView?.findViewById<ImageButton>(R.id.btnPlayPause)
-        btnPlayPause?.setImageResource(
-            if (isPlaying) android.R.drawable.ic_media_pause 
-            else android.R.drawable.ic_media_play
-        )
+        if (::btnPlayPause.isInitialized) {
+            btnPlayPause.setImageResource(
+                if (isPlaying) android.R.drawable.ic_media_pause 
+                else android.R.drawable.ic_media_play
+            )
+        }
     }
 
     private fun updateWidgetCounter() {
-        val txtCounter = floatingView?.findViewById<TextView>(R.id.txtSentenceCounter)
-        txtCounter?.text = "\${currentSentenceIndex + 1}/\${sentences.size}"
+        if (::txtCounter.isInitialized) {
+            txtCounter.text = "\${currentSentenceIndex + 1}/\${sentences.size}"
+        }
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            const channel = NotificationChannel(
+            val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Lector PDF Flotante",
                 NotificationManager.IMPORTANCE_LOW
@@ -915,9 +1067,10 @@ class FloatingControlService : Service(), TextToSpeech.OnInitListener {
     content: `package com.neuronal.pdfreader
 
 import android.content.Context
-import android.graphics.pdf.PdfRenderer
 import android.net.Uri
-import android.os.ParcelFileDescriptor
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -934,12 +1087,21 @@ data class ProcessedPdfData(
 
 class PdfDataPipeline(private val context: Context) {
 
+    init {
+        // Inicializar motor de extracción de texto PdfBox para Android
+        try {
+            PDFBoxResourceLoader.init(context)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     /**
      * Ejecuta el pipeline completo en hilos secundarios (IO)
      * Extract -> Transform -> Chunk
      */
     suspend fun extractAndTransform(pdfUri: Uri): ProcessedPdfData = withContext(Dispatchers.IO) {
-        // FASE 1: EXTRACT (Lazy Loading desde ParcelFileDescriptor)
+        // FASE 1: EXTRACT (Extracción de texto usando PdfBox-Android)
         val rawPageTexts = extractRawTextFromPdfUri(pdfUri)
         val fullRawText = rawPageTexts.joinToString(" ")
 
@@ -959,49 +1121,51 @@ class PdfDataPipeline(private val context: Context) {
     }
 
     /**
-     * FASE 1: EXTRACT (Lectura diferida mediante PdfRenderer o copia temporal)
+     * FASE 1: EXTRACT (Extracción de texto real mediante PdfBox-Android)
      */
     private fun extractRawTextFromPdfUri(uri: Uri): List<String> {
         val pageTexts = mutableListOf<String>()
+        var document: PDDocument? = null
+        var tempFile: File? = null
         
         try {
             val contentResolver = context.contentResolver
             val inputStream = contentResolver.openInputStream(uri) ?: return emptyList()
 
-            // Crear archivo temporal para ParcelFileDescriptor
-            val tempFile = File.createTempFile("pdf_extract_", ".pdf", context.cacheDir)
+            // Crear archivo temporal
+            tempFile = File.createTempFile("pdf_extract_", ".pdf", context.cacheDir)
             val outputStream = FileOutputStream(tempFile)
             
             inputStream.copyTo(outputStream)
             inputStream.close()
             outputStream.close()
 
-            val pfd = ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_ONLY)
-            val pdfRenderer = PdfRenderer(pfd)
+            // Cargar documento con PDFBox
+            document = PDDocument.load(tempFile)
+            val pdfStripper = PDFTextStripper()
 
-            // Carga de texto por página en diferido (Lazy Page Extraction)
-            for (pageIndex in 0 until pdfRenderer.pageCount) {
-                // Para extracción de texto en Kotlin Android nativo sin librerías pesadas,
-                // se complementa con PdfBox-Android o lectura nativa de stream.
-                val extractedPageText = extractPageTextNative(tempFile, pageIndex)
-                pageTexts.add(extractedPageText)
+            val pageCount = document.numberOfPages
+            for (i in 1..pageCount) {
+                pdfStripper.startPage = i
+                pdfStripper.endPage = i
+                val text = pdfStripper.getText(document) ?: ""
+                pageTexts.add(text)
             }
-
-            pdfRenderer.close()
-            pfd.close()
-            tempFile.delete()
 
         } catch (e: Exception) {
             e.printStackTrace()
+            // Si falla PdfBox, retornar mensaje informativo
+            pageTexts.add("Error al extraer texto del PDF. Verifica que no sea un PDF escaneado basado en imagen.")
+        } finally {
+            try {
+                document?.close()
+                tempFile?.delete()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         return pageTexts
-    }
-
-    private fun extractPageTextNative(pdfFile: File, pageIndex: Int): String {
-        // Mock / Módulo ligero de extracción nativa (ej. PdfBox-Android PDDocument.load)
-        // Retorna el texto bruto cargado de la página específica
-        return "Texto bruto extraído de página \${pageIndex + 1}."
     }
 
     /**
@@ -1015,35 +1179,121 @@ class PdfDataPipeline(private val context: Context) {
         var cleaned = rawText
 
         // 1. Unir palabras divididas por guiones (ej: "transfor-\nmación" -> "transformación")
-        val hyphenPattern = Pattern.compile("([a-zA-ZáéíóúñÁÉÍÓÚÑ]+)-\\\\s*[\\\\r\\\\n]+\\\\s*([a-zA-ZáéíóúñÁÉÍÓÚÑ]+)")
+        val hyphenPattern = Pattern.compile("([a-zA-ZáéíóúñÁÉÍÓÚÑ]+)-\\s*[\\r\\n]+\\s*([a-zA-ZáéíóúñÁÉÍÓÚÑ]+)")
         cleaned = hyphenPattern.matcher(cleaned).replaceAll("$1$2")
 
         // 2. Limpiar saltos de línea basura dentro de oraciones
-        // Reemplaza saltos de línea que no estén precedidos o seguidos por fin de párrafo
-        val newlinePattern = Pattern.compile("(?<![.!?;\\\\n])\\\\s*[\\\\r\\\\n]+\\\\s*(?![.!?;\\\\n])")
+        val newlinePattern = Pattern.compile("(?<![.!?;\\n])\\s*[\\r\\n]+\\s*(?![.!?;\\n])")
         cleaned = newlinePattern.matcher(cleaned).replaceAll(" ")
 
         // 3. Normalizar espacios múltiples
-        cleaned = cleaned.replace("\\\\s+".toRegex(), " ")
+        cleaned = cleaned.replace("\\s+".toRegex(), " ")
 
         return cleaned.trim()
     }
 
     /**
      * FASE 3: CHUNK (Chunking Semántico)
-     * Divide el texto en un arreglo indexado basado estrictamente en oraciones completas
+     * Divide el texto en un arreglo indexado basado strictly en oraciones completas
      * Delimitado por puntos, signos de interrogación y exclamación (. ? !)
      */
     fun chunkIntoSentences(sanitizedText: String): List<String> {
         if (sanitizedText.isBlank()) return emptyList()
 
         // Expresión regular que divide por fin de oración manteniendo coherencia semántica
-        val sentenceRegex = "(?<=[.!?])\\\\s+".toRegex()
+        val sentenceRegex = "(?<=[.!?])\\s+".toRegex()
         
         return sanitizedText
             .split(sentenceRegex)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
+    }
+
+    /**
+     * FASE 1B: FILTRADO DE PIES DE PÁGINA, ENCABEZADOS Y NÚMEROS DE PÁGINA
+     * Omite completamente números de página, avisos legales y running headers.
+     */
+    fun isPageHeaderOrFooter(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return true
+        
+        // Número de página aislado (ej. "12", "- 12 -", "Página 12", "Pág. 12 de 45")
+        val standalonePageNum = Regex("(?i)^(?:[-–—\\[\\(\\s]*)(?:pág(?:ina)?|pag(?:ina)?|page)?\\.?\\s*\\d+\\s*(?:de|\\/)?\\s*\\d*(?:[-–—\\]\\)\\s]*)$")
+        if (standalonePageNum.matches(trimmed)) return true
+
+        // Copyright o avisos legales al pie
+        val copyrightRegex = Regex("(?i)^(copyright|©|todos los derechos reservados|all rights reserved|isbn\\b|issn\\b)")
+        if (copyrightRegex.containsMatchIn(trimmed) && trimmed.length < 90) return true
+
+        return false
+    }
+
+    /**
+     * FASE 1C: PREPARACIÓN FONÉTICA PARA TTS NEURONAL NATURAL
+     * Expande abreviaturas y elimina símbolos o corchetes de citas bibliográficas.
+     */
+    fun prepareTextForSpeech(text: String): String {
+        var speech = text
+            .replace(Regex("\\[\\d+(?:\\s*,\\s*\\d+|\\s*[-–—]\\s*\\d+)*\\]"), "") // Limpiar [1]
+            .replace(Regex("\\s*[—–-]{2,}\\s*"), ", ") // Guiones a comas
+            .replace(Regex("(?i)\\bpág\\.\\s*"), "página ")
+            .replace(Regex("(?i)\\bcap\\.\\s*"), "capítulo ")
+            .replace(Regex("(?i)\\bdr\\.\s*"), "doctor ")
+            .replace(Regex("(?i)\\betc\\.\\b"), "etcétera")
+        return speech.trim()
+    }
+
+    enum class HeadingCategory {
+        CONTENT, FRONT_MATTER, CHAPTER, APPENDIX, BIBLIOGRAPHY, SECTION
+    }
+
+    data class PdfHeading(
+        val title: String,
+        val sentenceIndex: Int,
+        val level: Int, // 1 = Capítulo / Título, 2 = Subtítulo
+        val isFrontMatter: Boolean = false,
+        val category: HeadingCategory = HeadingCategory.SECTION
+    )
+
+    /**
+     * FASE 4: DETECCIÓN Y NAVEGACIÓN EN ESTRUCTURA DEL DOCUMENTO
+     * Identifica automáticamente Tabla de Contenido, Capítulos, Apéndices y Bibliografía.
+     */
+    fun detectHeadings(sentences: List<String>): List<PdfHeading> {
+        val headings = mutableListOf<PdfHeading>()
+        
+        val contentRegex = Regex("(?i)^(TABLA DE CONTENIDO|CONTENIDO|ÍNDICE|INDICE|SUMARIO|TABLE OF CONTENTS)")
+        val frontMatterRegex = Regex("(?i)^(AGRADECIMIENTOS|DERECHOS DE AUTOR|COPYRIGHT|PREFACIO|PRÓLOGO|EDICIÓN)")
+        val chapterRegex = Regex("(?i)^(CAPÍTULO|CAPITULO|CHAPTER|PARTE|UNIDAD|MÓDULO|LECCIÓN)\\s+([0-9IVXLCDM]+|[\\wÁÉÍÓÚÑ]+)")
+        val appendixRegex = Regex("(?i)^(APÉNDICE|APENDICE|APPENDIX|ANEXO|ANEXOS)")
+        val biblioRegex = Regex("(?i)^(BIBLIOGRAFÍA|BIBLIOGRAFIA|REFERENCIAS|FUENTES|WORKS CITED|REFERENCES)")
+        val numberedSectionRegex = Regex("^(?:\\d+\\.|\\d+\\.\\d+|[IVXLCDM]+\\.)\\s+[A-ZÁÉÍÓÚÑ]")
+
+        sentences.forEachIndexed { index, text ->
+            val trimmed = text.trim()
+            when {
+                contentRegex.containsMatchIn(trimmed) -> {
+                    headings.add(PdfHeading(trimmed, index, 1, isFrontMatter = true, category = HeadingCategory.CONTENT))
+                }
+                frontMatterRegex.containsMatchIn(trimmed) -> {
+                    headings.add(PdfHeading(trimmed, index, 1, isFrontMatter = true, category = HeadingCategory.FRONT_MATTER))
+                }
+                chapterRegex.containsMatchIn(trimmed) -> {
+                    headings.add(PdfHeading(trimmed, index, 1, isFrontMatter = false, category = HeadingCategory.CHAPTER))
+                }
+                appendixRegex.containsMatchIn(trimmed) -> {
+                    headings.add(PdfHeading(trimmed, index, 1, isFrontMatter = false, category = HeadingCategory.APPENDIX))
+                }
+                biblioRegex.containsMatchIn(trimmed) -> {
+                    headings.add(PdfHeading(trimmed, index, 1, isFrontMatter = false, category = HeadingCategory.BIBLIOGRAPHY))
+                }
+                numberedSectionRegex.containsMatchIn(trimmed) -> {
+                    val isSub = trimmed.contains(Regex("^\\d+\\.\\d+"))
+                    headings.add(PdfHeading(trimmed, index, if (isSub) 2 else 1, isFrontMatter = false, category = HeadingCategory.SECTION))
+                }
+            }
+        }
+        return headings
     }
 }
 `
@@ -1114,6 +1364,79 @@ dependencies {
     // Extracción de PDF ligera (PdfBox Android)
     implementation("com.tom_roush:pdfbox-android:2.0.27.0")
 }
+`
+  },
+  {
+    id: 'floating_layout_xml',
+    name: 'widget_floating_control.xml',
+    path: 'app/src/main/res/layout/widget_floating_control.xml',
+    language: 'xml',
+    description: 'Layout XML opcional para el widget flotante superpuesto con botones e íconos.',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:padding="8dp"
+    android:background="#EE1E293B">
+
+    <ImageButton
+        android:id="@+id/btnPrev"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:src="@android:drawable/ic_media_previous"
+        android:tint="#FFFFFF"
+        android:contentDescription="Anterior" />
+
+    <ImageButton
+        android:id="@+id/btnPlayPause"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:src="@android:drawable/ic_media_play"
+        android:tint="#4ADE80"
+        android:contentDescription="Play o Pausa" />
+
+    <ImageButton
+        android:id="@+id/btnNext"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:src="@android:drawable/ic_media_next"
+        android:tint="#FFFFFF"
+        android:contentDescription="Siguiente" />
+
+    <TextView
+        android:id="@+id/txtSentenceCounter"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="0/0"
+        android:textColor="#CBD5E1"
+        android:textSize="12sp"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp" />
+
+    <ImageButton
+        android:id="@+id/btnVoice"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:src="@android:drawable/ic_btn_speak_now"
+        android:tint="#38BDF8"
+        android:contentDescription="Cambiar Voz" />
+
+    <ImageButton
+        android:id="@+id/btnClose"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:src="@android:drawable/ic_menu_close_clear_cancel"
+        android:tint="#F87171"
+        android:contentDescription="Cerrar" />
+
+</LinearLayout>
 `
   }
 ];

@@ -5,12 +5,25 @@ export interface SentenceChunk {
   characterLength: number;
 }
 
+export type HeadingCategory = 'content' | 'frontmatter' | 'chapter' | 'section' | 'appendix' | 'bibliography';
+
+export interface HeadingItem {
+  id: string;
+  title: string;
+  sentenceIndex: number;
+  level: 1 | 2; // 1 = Chapter / Title, 2 = Subtitle / Section
+  pageNumber: number;
+  isFrontMatter?: boolean; // True for Copyright, Acknowledgments, Table of Contents, Editorial
+  category: HeadingCategory;
+}
+
 export interface PdfDocumentData {
   title: string;
   totalPages: number;
   rawPageTexts: string[];
   sanitizedText: string;
   sentences: SentenceChunk[];
+  headings?: HeadingItem[];
   fileName?: string;
   fileSize?: string;
 }

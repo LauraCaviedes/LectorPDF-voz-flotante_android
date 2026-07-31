@@ -9,21 +9,33 @@ import { ArchitectureView } from './components/Architecture/ArchitectureView';
 import { SAMPLE_PDFS } from './data/samplePdfs';
 import { ANDROID_CODE_FILES } from './data/androidCode';
 import { PdfDocumentData, FloatingWidgetState } from './types';
-import { sanitizePdfText, chunkIntoSentences, extractTextFromPdfFile } from './utils/pdfPipeline';
+import { 
+  sanitizePdfText, 
+  chunkIntoSentences, 
+  extractTextFromPdfFile, 
+  extractHeadingsFromSentences,
+  findNextHeadingSentenceIndex,
+  findPrevHeadingSentenceIndex,
+  findFirstMainContentSentenceIndex,
+  findFirstSentenceIndexForPage,
+  prepareTextForSpeech
+} from './utils/pdfPipeline';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'simulator' | 'pipeline' | 'code' | 'architecture'>('simulator');
   
-  // Initialize sample PDF #1 with Regex & Chunk pipeline processed
+  // Initialize sample PDF #1 with Regex, Headings & Chunk pipeline processed
   const initialPdf = React.useMemo(() => {
     const p1 = SAMPLE_PDFS[0];
     const fullRaw = p1.rawPageTexts.join('\n\n');
     const sanitized = sanitizePdfText(fullRaw);
     const sentences = chunkIntoSentences(sanitized, 1);
+    const headings = extractHeadingsFromSentences(sentences);
     return {
       ...p1,
       sanitizedText: sanitized,
       sentences,
+      headings,
     };
   }, []);
 
@@ -33,7 +45,8 @@ export default function App() {
       const raw = p.rawPageTexts.join('\n\n');
       const sanitized = sanitizePdfText(raw);
       const sentences = chunkIntoSentences(sanitized, 1);
-      return { ...p, sanitizedText: sanitized, sentences };
+      const headings = extractHeadingsFromSentences(sentences);
+      return { ...p, sanitizedText: sanitized, sentences, headings };
     });
   });
 
@@ -121,9 +134,12 @@ export default function App() {
 
   // Preprocesses text for smoother, softer reading cadence
   const formatSoftText = (text: string, isSmooth: boolean): string => {
-    if (!isSmooth) return text;
-    // Add micro breathing pauses at punctuation marks and conjunctions
-    return text
+    // 1. Aplicar expansiones de abreviaturas y limpieza de referencias
+    let prepared = prepareTextForSpeech(text);
+    if (!isSmooth) return prepared;
+    
+    // 2. Micro pausas breathing en signos de puntuación y conectores
+    return prepared
       .replace(/([,;:]|\bque\b|\bpor lo tanto\b|\bademás\b)/gi, '$1, ')
       .replace(/\s+/g, ' ')
       .trim();
@@ -224,8 +240,39 @@ export default function App() {
     }
   };
 
+  const handleNextSection = () => {
+    const headings = currentPdf.headings || [];
+    const nextIdx = findNextHeadingSentenceIndex(widgetState.currentSentenceIndex, headings);
+    if (nextIdx !== null) {
+      speakSentence(nextIdx);
+    } else {
+      handleNextSentence();
+    }
+  };
+
+  const handlePrevSection = () => {
+    const headings = currentPdf.headings || [];
+    const prevIdx = findPrevHeadingSentenceIndex(widgetState.currentSentenceIndex, headings);
+    if (prevIdx !== null) {
+      speakSentence(prevIdx);
+    } else {
+      handlePrevSentence();
+    }
+  };
+
+  const handleSkipFrontMatter = () => {
+    const headings = currentPdf.headings || [];
+    const firstMainIdx = findFirstMainContentSentenceIndex(headings);
+    speakSentence(firstMainIdx);
+  };
+
   const handleJumpToSentence = (index: number) => {
     speakSentence(index);
+  };
+
+  const handleJumpToPage = (pageNumber: number) => {
+    const targetIdx = findFirstSentenceIndexForPage(pageNumber, currentPdf.sentences);
+    speakSentence(targetIdx);
   };
 
   const handleToggleMasterSwitch = (enabled: boolean) => {
@@ -358,6 +405,14 @@ Aplicación Android para la interceptación y lectura en voz alta de archivos PD
   };
 
   const activeSentenceText = currentPdf.sentences[widgetState.currentSentenceIndex]?.text;
+  
+  const currentHeadings = currentPdf.headings || [];
+  const currentHeading = currentHeadings
+    .filter(h => h.sentenceIndex <= widgetState.currentSentenceIndex)
+    .pop();
+  const currentHeadingTitle = currentHeading ? currentHeading.title : undefined;
+  const hasFrontMatter = currentHeadings.some(h => h.isFrontMatter) && 
+    widgetState.currentSentenceIndex < (currentHeadings.find(h => !h.isFrontMatter)?.sentenceIndex || Infinity);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-teal-600 selection:text-white">
@@ -374,10 +429,18 @@ Aplicación Android para la interceptación y lectura en voz alta de archivos PD
       <FloatingWidgetOverlay
         state={widgetState}
         totalSentences={currentPdf.sentences.length}
+        totalPages={currentPdf.totalPages}
+        currentPageNumber={currentPdf.sentences[widgetState.currentSentenceIndex]?.pageNumber || 1}
         currentSentenceText={activeSentenceText}
+        currentHeadingTitle={currentHeadingTitle}
+        hasFrontMatter={hasFrontMatter}
         onPlayPause={handlePlayPause}
         onNextSentence={handleNextSentence}
         onPrevSentence={handlePrevSentence}
+        onNextSection={handleNextSection}
+        onPrevSection={handlePrevSection}
+        onSkipFrontMatter={handleSkipFrontMatter}
+        onJumpToPage={handleJumpToPage}
         onStopService={() => handleToggleMasterSwitch(false)}
         onPositionChange={(pos) => setWidgetState(prev => ({ ...prev, position: pos }))}
       />
@@ -400,6 +463,10 @@ Aplicación Android para la interceptación y lectura en voz alta de archivos PD
             onVoiceChange={handleVoiceChange}
             onPlayPause={handlePlayPause}
             onJumpToSentence={handleJumpToSentence}
+            onJumpToPage={handleJumpToPage}
+            onNextSection={handleNextSection}
+            onPrevSection={handlePrevSection}
+            onSkipFrontMatter={handleSkipFrontMatter}
             onSimulateIntent={handleSimulateIntent}
           />
         )}
